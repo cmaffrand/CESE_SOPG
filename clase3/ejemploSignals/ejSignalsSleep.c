@@ -15,29 +15,13 @@ int main(void)
 	sa.sa_flags = SA_RESTART; //0
 	// Con SA_RESTART vuelve a ejecutar.
 	// Con 0 sigue ejecutando.
+
 	sigemptyset(&sa.sa_mask);
-
 	sigaction(SIGINT,&sa,NULL);
-
+    
+    printf("inicio\n");
+	unsigned int r = sleep(30);
+	printf("fin. %u\n",r);
 	
-	/*char s[200];
-	if(fgets(s,sizeof(s),stdin) == NULL)
-	{
-		perror("error en fgets");
-	}
-	else
-	{
-		printf("ingresaste:%s\n",s);
-	}*/
-	
-		
-	//while(1)
-	//{
-		printf("inicio\n");
-		unsigned int r = sleep(30);
-		printf("fin. %u\n",r);
-	//}
-	
-
 	return 0;
 }
