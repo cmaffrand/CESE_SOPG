@@ -1,5 +1,6 @@
 # Folfers
 ./vscode
+out/
 
 # Prerequisites
 *.d
