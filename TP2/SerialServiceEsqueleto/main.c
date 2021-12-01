@@ -12,16 +12,51 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+#include <signal.h>
+
+char lineState[NUMBER_OF_LINES] = {0, 0, 0, 0};
+pthread_mutex_t mutexLineState = PTHREAD_MUTEX_INITIALIZER;
+
+void recibiSignal(int sig)
+{
+	if ((sig == SIGINT) || (sig = SIGTERM))
+	{
+		printf(CLOSE_MSG);
+		exit(EXIT_SUCCESS);
+	}
+}
+
+void bloquearSign(void)
+{
+	sigset_t set;
+	int s;
+	sigemptyset(&set);
+	sigaddset(&set, SIGINT);
+	sigaddset(&set, SIGTERM);
+	pthread_sigmask(SIG_BLOCK, &set, NULL);
+}
+
+void desbloquearSign(void)
+{
+	sigset_t set;
+	int s;
+	sigemptyset(&set);
+	sigaddset(&set, SIGINT);
+	sigaddset(&set, SIGTERM);
+	pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+}
+
 void *tpcInterface(void *param)
 {
 	socklen_t addr_len;
 	struct sockaddr_in clientaddr;
 	struct sockaddr_in serveraddr;
 	char buffer[TCP_MAX_CHARS];
-	int newfd;
 	int n;
-	int toggleLine = 0;
+	int newfd;
 	char tcpFrame[TCP_MAX_CHARS] = TCP_MSG;
+	char tcpState[NUMBER_OF_LINES] = {0, 0, 0, 0};
+	char tcpStateLast[NUMBER_OF_LINES] = {0, 0, 0, 0};
 
 	// Creamos socket
 	int s = socket(PF_INET, SOCK_STREAM, 0);
@@ -36,22 +71,20 @@ void *tpcInterface(void *param)
 		printf("%s: ", (const char *)param);
 		fprintf(stderr, "ERROR invalid server IP\r\n");
 		exit(EXIT_FAILURE);
-		return 0;
 	}
 
 	// Abrimos puerto con bind()
 	if (bind(s, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) == -1)
 	{
 		close(s);
-		perror("listener: bind");
+		perror("listener: bind\r\n");
 		exit(EXIT_FAILURE);
-		return 0;
 	}
 
 	// Seteamos socket en modo Listening
 	if (listen(s, 10) == -1) // backlog=10
 	{
-		perror("error en listen");
+		perror("error en listen\r\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -61,41 +94,64 @@ void *tpcInterface(void *param)
 		addr_len = sizeof(struct sockaddr_in);
 		if ((newfd = accept(s, (struct sockaddr *)&clientaddr, &addr_len)) == -1)
 		{
-			perror("error en accept");
+			perror("error en accept\r\n");
 			exit(EXIT_FAILURE);
 		}
 		printf("%s: ", (const char *)param);
-		printf("conexion desde:  %s\n", inet_ntoa(clientaddr.sin_addr));
+		printf("conexion desde:  %s -> ", inet_ntoa(clientaddr.sin_addr));
+		printf("Puerto: %d -> ", TCP_PORT);
+		printf("FileDescriptor: %d\r\n", newfd);
 
 		// Leemos mensaje de cliente
-		if ((n = read(newfd, buffer, 128)) == -1)
+		if ((n = read(newfd, buffer, TCP_MAX_CHARS)) == -1)
 		{
-			perror("Error leyendo mensaje en socket");
+			perror("Error leyendo mensaje en socket\r\n");
 			exit(EXIT_FAILURE);
 		}
 		buffer[n] = 0;
 		printf("%s: ", (const char *)param);
-		printf("Recibi %d bytes.: %s", n, buffer);
+		printf("Status Recibido: %s", buffer);
 
-		// Enviamos mensaje a cliente
-		toggleLine++;
-		if (toggleLine > 3)
+		for (char j = 0; j < NUMBER_OF_LINES; j++)
 		{
-			toggleLine = 0;
+			tcpState[j] = buffer[TCP_DATAIN + j] - '0';
+			// Si existe un cambio en la web
+			if (tcpStateLast[j] != tcpState[j])
+			{
+				pthread_mutex_lock(&mutexLineState);
+				lineState[j] = tcpState[j];
+				pthread_mutex_unlock(&mutexLineState);
+			}
+			else
+			{
+				pthread_mutex_lock(&mutexLineState);
+				// Si existe un cambio en UART
+				while (lineState[j] != tcpState[j])
+				{
+					tcpFrame[DATAOUT_CHAR] = '0' + j;
+					tcpState[j]++;
+					if (tcpState[j] > 2)
+					{
+						tcpState[j] = 0;
+					}
+					// Enviamos mensaje a cliente
+					if (write(newfd, tcpFrame, TCP_MSG_LENGTH) == -1)
+					{
+						perror("Error escribiendo mensaje en socket\r\n");
+						exit(EXIT_FAILURE);
+					}
+					printf("%s: ", (const char *)param);
+					printf("Comando enviado a Web originado en UART: %.*s", (int)TCP_MSG_LENGTH, tcpFrame);
+					sleep(1);
+				}
+				pthread_mutex_unlock(&mutexLineState);
+			}
+			tcpStateLast[j] = tcpState[j];
 		}
-		tcpFrame[DATAOUT_CHAR] = toggleLine + '0';
-
-		if (write(newfd, tcpFrame, TCP_MSG_LENGTH) == -1)
-		{
-			perror("Error escribiendo mensaje en socket");
-			exit(EXIT_FAILURE);
-		}
-
 		// Cerramos conexion con cliente
 		close(newfd);
 	}
-
-	return 0;
+	exit(EXIT_FAILURE);
 }
 
 void *serialInterface(void *param)
@@ -104,10 +160,8 @@ void *serialInterface(void *param)
 	int initPort = 0;
 	char serialBufferIn[SERIAL_MAX_CHARS];
 	char serialBufferOut[SERIAL_MAX_CHARS] = SERIAL_OUTPUT_INIT;
-	char ledState[4] = {0, 0, 0, 0};
+	char ledState[NUMBER_OF_LINES] = {0, 0, 0, 0};
 
-	printf("%s: ", (const char *)param);
-	printf("Inicio Serial Service\r\n");
 	// Abre el puerto serie
 	serialPort = serial_open(PORT_CIAA, PORT_BAUDRATE);
 
@@ -128,7 +182,8 @@ void *serialInterface(void *param)
 		serialStatus = serial_receive(serialBufferIn, SERIAL_MAX_CHARS);
 		if (serialStatus != -1 && serialStatus != 0)
 		{
-			if (serialBufferIn[INIT_CHAR] == 'T') // Recibe comando de Toggle
+			// Recibe comando de Toggle
+			if (serialBufferIn[INIT_CHAR] == 'T')
 			{
 				printf("%s: ", (const char *)param);
 				printf("Comando valido recibido: %.*s -> ", serialStatus - 2, serialBufferIn);
@@ -138,19 +193,45 @@ void *serialInterface(void *param)
 				{
 					ledState[serialBufferIn[DATAIN_CHAR] - '0'] = 0;
 				}
+				pthread_mutex_lock(&mutexLineState);
+				lineState[serialBufferIn[DATAIN_CHAR] - '0'] = ledState[serialBufferIn[DATAIN_CHAR] - '0'];
+				pthread_mutex_unlock(&mutexLineState);
 				serialBufferOut[LED0_CMD_CHAR] = ledState[0] + '0';
 				serialBufferOut[LED1_CMD_CHAR] = ledState[1] + '0';
 				serialBufferOut[LED2_CMD_CHAR] = ledState[2] + '0';
 				serialBufferOut[LED3_CMD_CHAR] = ledState[3] + '0';
 				serial_send(serialBufferOut, SERIAL_OUTPUT_NUMBER_CHARS);
 				printf("%s: ", (const char *)param);
-				printf("Comando enviado a EDU CIAA: %*s", SERIAL_OUTPUT_NUMBER_CHARS, serialBufferOut);
+				printf("Comando enviado a EDU CIAA originado en UART: %.*s", SERIAL_OUTPUT_NUMBER_CHARS, serialBufferOut);
 			}
-			else if (serialBufferIn[INIT_CHAR] == 'O') // Recibe ACK
+			// Recibe ACK
+			else if (serialBufferIn[INIT_CHAR] == 'O')
 			{
 				printf("%s: ", (const char *)param);
 				printf("ACK recibido: %.*s -> ", serialStatus - 2, serialBufferIn);
 				printf("serialStatus: %d\r\n", serialStatus);
+			}
+		}
+		else
+		{
+			// Actualiza estado de las lineas ante cambios en TCP
+			int change = 0;
+			for (char i = 0; i < NUMBER_OF_LINES; i++)
+			{
+				pthread_mutex_lock(&mutexLineState);
+				if (ledState[i] != lineState[i])
+				{
+					ledState[i] = lineState[i];
+					serialBufferOut[LED0_CMD_CHAR + i * 2] = ledState[i] + '0';
+					change = 1;
+				}
+				pthread_mutex_unlock(&mutexLineState);
+			}
+			if (change == 1)
+			{
+				serial_send(serialBufferOut, SERIAL_OUTPUT_NUMBER_CHARS);
+				printf("%s: ", (const char *)param);
+				printf("Comando enviado a EDU CIAA originado en TCP: %.*s", SERIAL_OUTPUT_NUMBER_CHARS, serialBufferOut);
 			}
 		}
 		sleep(1);
@@ -160,41 +241,55 @@ void *serialInterface(void *param)
 	printf("Puerto serie no pudo ser inicializado -> ");
 	printf("serialPort: %d\r\n", serialPort);
 	exit(EXIT_FAILURE);
-	return 0;
 }
 
 int main(void)
 {
-	pthread_t serialThread, tcpThread;
 	int serialThreadCheck, tcpThreadCheck;
 	const char *message1 = "Thread Serie";
 	const char *message2 = "Thread TCP";
+	struct sigaction sa;
+	pthread_t serialThread, tcpThread;
 
+	printf("Main: Inicio Serial Service\r\n");
+
+	// Manejo de seniales
+	sa.sa_handler = recibiSignal;
+	sa.sa_flags = SA_RESTART;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGINT, &sa, NULL) == -1)
+	{
+		perror("sigaction\r\n");
+		exit(EXIT_FAILURE);
+	}
+	if (sigaction(SIGTERM, &sa, NULL) == -1)
+	{
+		perror("sigaction\r\n");
+		exit(EXIT_FAILURE);
+	}
+
+	// Creacion de threads
+	bloquearSign();
 	serialThreadCheck = pthread_create(&serialThread, NULL, serialInterface, (void *)message1);
 	if (serialThreadCheck != 0)
 	{
-		printf("No se pudo crear el thread del puerto serie");
-		return 0;
+		printf("No se pudo crear el thread del puerto serie\r\n");
+		exit(EXIT_FAILURE);
 	}
-
+	printf("Main: Thread del puerto serie creado\n\r");
 	tcpThreadCheck = pthread_create(&tcpThread, NULL, tpcInterface, (void *)message2);
 	if (tcpThreadCheck != 0)
 	{
-		printf("No se pudo crear el thread del TCP");
-		return 0;
+		printf("No se pudo crear el thread del TCP\r\n");
+		exit(EXIT_FAILURE);
 	}
+	printf("Main: Thread TCP creado\r\n");
+	desbloquearSign();
 
-	// Poner en manejo de seniales
-	/*printf("Espero 10 segs \n");
-	sleep(10);
-	printf("Espero el hilo 1\n");
-	pthread_join (thing1, NULL);
-	printf("Espero el hilo 2\n");
-	pthread_join (thing2, NULL);*/
-
+	// No se hace nada en el main más que esperar las señales
 	while (1)
 	{
 		sleep(100);
 	}
-	return 0;
+	exit(EXIT_FAILURE);
 }

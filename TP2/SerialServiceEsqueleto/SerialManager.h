@@ -19,7 +19,15 @@ int serial_receive(char* buf,int size);
 #define TCP_MSG ":LINEXTG\n\0"
 #define TCP_MSG_LENGTH sizeof(TCP_MSG)
 #define DATAOUT_CHAR 5
-#define TCP_MAX_CHARS 20
+#define TCP_MAX_CHARS 128
 #define TCP_PORT 10000
 #define SERVER_TCP_ADDRESS "127.0.0.1"
+#define TCP_DATAIN 7
+#define NUMBER_OF_LINES 4
+
+#define CLOSE_TCP_MSG "Se deconecta el Server TCP\r\n"
+#define CLOSE_UART_MSG "Se cierra el puerto UART\r\n"
+#define CLOSE_TCP_THREAD_MSG "Join del thread TCP\r\n"
+#define CLOSE_UART_THREAD_MSG "Join del thread UART\r\n"
+#define CLOSE_MSG "Se cierra el Serial Servive\r\n"
 

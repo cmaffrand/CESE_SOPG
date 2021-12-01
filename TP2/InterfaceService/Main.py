@@ -64,11 +64,14 @@ def rcvThread(sock):
 	global outChanged
 	print("INICIO thread recepcion")
 	while True:
-		data = sock.recv(128)
-		if len(data)==0:
-			print("Se cerro la conexion")
-			break
-		print("LLEGO:"+data)
+		try: 
+			data = sock.recv(128)
+			if len(data)==0:
+				print("Se cerro la conexion")
+				break
+			print("LLEGO:"+data)
+		except:
+			print("Retry")
 		try:
 			data = data.split(":LINE")
 			data = data[1].split("TG\n")
