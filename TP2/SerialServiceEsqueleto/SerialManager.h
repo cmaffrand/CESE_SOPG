@@ -24,6 +24,7 @@ int serial_receive(char *buf, int size);
 #define SERVER_TCP_ADDRESS "127.0.0.1"
 #define TCP_DATAIN 7
 #define NUMBER_OF_LINES 4
+#define INVALID_FD -1
 
 #define CLOSE_TCP_MSG "Se deconecta el Server TCP\r\n"
 #define CLOSE_UART_MSG "Se cierra el puerto UART\r\n"

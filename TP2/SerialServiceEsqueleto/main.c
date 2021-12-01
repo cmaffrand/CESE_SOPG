@@ -16,6 +16,7 @@
 
 char lineState[NUMBER_OF_LINES] = {0, 0, 0, 0};
 pthread_mutex_t mutexLineState = PTHREAD_MUTEX_INITIALIZER;
+int newfd = INVALID_FD;
 
 void recibiSignal(int sig)
 {
@@ -53,10 +54,6 @@ void *tpcInterface(void *param)
 	struct sockaddr_in serveraddr;
 	char buffer[TCP_MAX_CHARS];
 	int n;
-	int newfd;
-	char tcpFrame[TCP_MAX_CHARS] = TCP_MSG;
-	char tcpState[NUMBER_OF_LINES] = {0, 0, 0, 0};
-	char tcpStateLast[NUMBER_OF_LINES] = {0, 0, 0, 0};
 
 	// Creamos socket
 	int s = socket(PF_INET, SOCK_STREAM, 0);
@@ -72,6 +69,11 @@ void *tpcInterface(void *param)
 		fprintf(stderr, "ERROR invalid server IP\r\n");
 		exit(EXIT_FAILURE);
 	}
+	else
+	{
+		printf("%s: ", (const char *)param);
+		printf("Socket successfully created..\n");
+	}
 
 	// Abrimos puerto con bind()
 	if (bind(s, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) == -1)
@@ -80,12 +82,22 @@ void *tpcInterface(void *param)
 		perror("listener: bind\r\n");
 		exit(EXIT_FAILURE);
 	}
+	else
+	{
+		printf("%s: ", (const char *)param);
+		printf("Socket successfully binded..\n");
+	}
 
 	// Seteamos socket en modo Listening
 	if (listen(s, 10) == -1) // backlog=10
 	{
 		perror("error en listen\r\n");
 		exit(EXIT_FAILURE);
+	}
+	else
+	{
+		printf("%s: ", (const char *)param);
+		printf("Server listening..\n");
 	}
 
 	while (1)
@@ -97,59 +109,50 @@ void *tpcInterface(void *param)
 			perror("error en accept\r\n");
 			exit(EXIT_FAILURE);
 		}
+		else
+		{
+			printf("%s: ", (const char *)param);
+			printf("server accept the client...\n");
+		}
 		printf("%s: ", (const char *)param);
 		printf("conexion desde:  %s -> ", inet_ntoa(clientaddr.sin_addr));
 		printf("Puerto: %d -> ", TCP_PORT);
 		printf("FileDescriptor: %d\r\n", newfd);
 
-		// Leemos mensaje de cliente
-		if ((n = read(newfd, buffer, TCP_MAX_CHARS)) == -1)
+		do
 		{
-			perror("Error leyendo mensaje en socket\r\n");
-			exit(EXIT_FAILURE);
-		}
-		buffer[n] = 0;
-		printf("%s: ", (const char *)param);
-		printf("Status Recibido: %s", buffer);
-
-		for (char j = 0; j < NUMBER_OF_LINES; j++)
-		{
-			tcpState[j] = buffer[TCP_DATAIN + j] - '0';
-			// Si existe un cambio en la web
-			if (tcpStateLast[j] != tcpState[j])
+			// Leemos mensaje de cliente
+			//bzero(buffer, TCP_MAX_CHARS);
+			if ((n = read(newfd, buffer, TCP_MAX_CHARS)) < 0)
 			{
-				pthread_mutex_lock(&mutexLineState);
-				lineState[j] = tcpState[j];
-				pthread_mutex_unlock(&mutexLineState);
+				perror("Error leyendo mensaje en socket\r\n");
+				exit(EXIT_FAILURE);
+			}
+			else if (n == 0)
+			{
+				break;
 			}
 			else
 			{
-				pthread_mutex_lock(&mutexLineState);
-				// Si existe un cambio en UART
-				while (lineState[j] != tcpState[j])
-				{
-					tcpFrame[DATAOUT_CHAR] = '0' + j;
-					tcpState[j]++;
-					if (tcpState[j] > 2)
-					{
-						tcpState[j] = 0;
-					}
-					// Enviamos mensaje a cliente
-					if (write(newfd, tcpFrame, TCP_MSG_LENGTH) == -1)
-					{
-						perror("Error escribiendo mensaje en socket\r\n");
-						exit(EXIT_FAILURE);
-					}
-					printf("%s: ", (const char *)param);
-					printf("Comando enviado a Web originado en UART: %.*s", (int)TCP_MSG_LENGTH, tcpFrame);
-					sleep(1);
-				}
-				pthread_mutex_unlock(&mutexLineState);
+				buffer[n] = 0;
+				printf("%s: ", (const char *)param);
+				printf("Status Recibido: %s", buffer);
 			}
-			tcpStateLast[j] = tcpState[j];
-		}
+
+			pthread_mutex_lock(&mutexLineState);
+			// Si existe un cambio en la web
+			for (char j = 0; j < NUMBER_OF_LINES; j++)
+			{
+				lineState[j] = buffer[TCP_DATAIN + j] - '0';
+			}
+			pthread_mutex_unlock(&mutexLineState);
+
+		} while (buffer[0] != 0);
+
 		// Cerramos conexion con cliente
 		close(newfd);
+		newfd = INVALID_FD;
+		printf("Conexion con Cliente perdida, reintentando...\r\n");
 	}
 	exit(EXIT_FAILURE);
 }
@@ -161,6 +164,7 @@ void *serialInterface(void *param)
 	char serialBufferIn[SERIAL_MAX_CHARS];
 	char serialBufferOut[SERIAL_MAX_CHARS] = SERIAL_OUTPUT_INIT;
 	char ledState[NUMBER_OF_LINES] = {0, 0, 0, 0};
+	char tcpFrame[TCP_MAX_CHARS] = TCP_MSG;
 
 	// Abre el puerto serie
 	serialPort = serial_open(PORT_CIAA, PORT_BAUDRATE);
@@ -172,10 +176,6 @@ void *serialInterface(void *param)
 			printf("%s: ", (const char *)param);
 			printf("Puerto serie inicializado -> ");
 			printf("serialPort: %d\r\n", serialPort);
-			// Resetea el estado de los leds
-			serial_send(serialBufferOut, SERIAL_OUTPUT_NUMBER_CHARS);
-			printf("%s: ", (const char *)param);
-			printf("Reset de Leds: %.*s", SERIAL_OUTPUT_NUMBER_CHARS, serialBufferOut);
 			initPort = 1;
 		}
 
@@ -188,14 +188,16 @@ void *serialInterface(void *param)
 				printf("%s: ", (const char *)param);
 				printf("Comando valido recibido: %.*s -> ", serialStatus - 2, serialBufferIn);
 				printf("serialStatus: %d\r\n", serialStatus);
+
+				pthread_mutex_lock(&mutexLineState);
 				ledState[serialBufferIn[DATAIN_CHAR] - '0']++;
 				if (ledState[serialBufferIn[DATAIN_CHAR] - '0'] > 2)
 				{
 					ledState[serialBufferIn[DATAIN_CHAR] - '0'] = 0;
 				}
-				pthread_mutex_lock(&mutexLineState);
 				lineState[serialBufferIn[DATAIN_CHAR] - '0'] = ledState[serialBufferIn[DATAIN_CHAR] - '0'];
 				pthread_mutex_unlock(&mutexLineState);
+
 				serialBufferOut[LED0_CMD_CHAR] = ledState[0] + '0';
 				serialBufferOut[LED1_CMD_CHAR] = ledState[1] + '0';
 				serialBufferOut[LED2_CMD_CHAR] = ledState[2] + '0';
@@ -203,6 +205,18 @@ void *serialInterface(void *param)
 				serial_send(serialBufferOut, SERIAL_OUTPUT_NUMBER_CHARS);
 				printf("%s: ", (const char *)param);
 				printf("Comando enviado a EDU CIAA originado en UART: %.*s", SERIAL_OUTPUT_NUMBER_CHARS, serialBufferOut);
+
+				if (newfd != INVALID_FD)
+				{
+					tcpFrame[DATAOUT_CHAR] = serialBufferIn[DATAIN_CHAR];
+					if (write(newfd, tcpFrame, TCP_MSG_LENGTH) == -1)
+					{
+						perror("Error escribiendo mensaje en socket\r\n");
+						exit(EXIT_FAILURE);
+					}
+					printf("%s: ", (const char *)param);
+					printf("Comando enviado a Web originado en UART: %.*s", (int)TCP_MSG_LENGTH, tcpFrame);
+				}
 			}
 			// Recibe ACK
 			else if (serialBufferIn[INIT_CHAR] == 'O')
