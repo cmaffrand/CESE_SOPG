@@ -1,8 +1,8 @@
 
-int serial_open(int pn,int baudrate);
-void serial_send(char* pData,int size);
+int serial_open(int pn, int baudrate);
+void serial_send(char *pData, int size);
 void serial_close(void);
-int serial_receive(char* buf,int size);
+int serial_receive(char *buf, int size);
 
 #define PORT_CIAA 1
 #define PORT_BAUDRATE 115200
@@ -30,4 +30,3 @@ int serial_receive(char* buf,int size);
 #define CLOSE_TCP_THREAD_MSG "Join del thread TCP\r\n"
 #define CLOSE_UART_THREAD_MSG "Join del thread UART\r\n"
 #define CLOSE_MSG "Se cierra el Serial Servive\r\n"
-
