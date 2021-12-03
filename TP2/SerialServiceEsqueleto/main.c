@@ -17,13 +17,17 @@
 char lineState[NUMBER_OF_LINES] = {0, 0, 0, 0};
 pthread_mutex_t mutexLineState = PTHREAD_MUTEX_INITIALIZER;
 int newfd = INVALID_FD;
+int checkOutSignal = 0;
 
 void recibiSignal(int sig)
 {
 	if ((sig == SIGINT) || (sig = SIGTERM))
 	{
-		printf(CLOSE_MSG);
-		exit(EXIT_SUCCESS);
+		checkOutSignal = 1;
+	}
+	else
+	{
+		checkOutSignal = 0;
 	}
 }
 
@@ -114,6 +118,7 @@ void *tpcInterface(void *param)
 			printf("%s: ", (const char *)param);
 			printf("server accept the client...\n");
 		}
+
 		printf("%s: ", (const char *)param);
 		printf("conexion desde:  %s -> ", inet_ntoa(clientaddr.sin_addr));
 		printf("Puerto: %d -> ", TCP_PORT);
@@ -122,7 +127,7 @@ void *tpcInterface(void *param)
 		do
 		{
 			// Leemos mensaje de cliente
-			//bzero(buffer, TCP_MAX_CHARS);
+			// bzero(buffer, TCP_MAX_CHARS);
 			if ((n = read(newfd, buffer, TCP_MAX_CHARS)) < 0)
 			{
 				perror("Error leyendo mensaje en socket\r\n");
@@ -150,9 +155,18 @@ void *tpcInterface(void *param)
 		} while (buffer[0] != 0);
 
 		// Cerramos conexion con cliente
-		close(newfd);
-		newfd = INVALID_FD;
-		printf("Conexion con Cliente perdida, reintentando...\r\n");
+		if (close(newfd) < 0)
+		{
+			printf("%s: ", (const char *)param);
+			printf("No se pudo cerrar el socket TCP\r\n");
+			exit(EXIT_FAILURE);
+		}
+		else
+		{
+			newfd = INVALID_FD;
+			printf("%s: ", (const char *)param);
+			printf("Conexion con Cliente perdida, reintentando...\r\n");
+		}
 	}
 	exit(EXIT_FAILURE);
 }
@@ -273,12 +287,12 @@ int main(void)
 	sigemptyset(&sa.sa_mask);
 	if (sigaction(SIGINT, &sa, NULL) == -1)
 	{
-		perror("sigaction\r\n");
+		perror("Main: sigaction\r\n");
 		exit(EXIT_FAILURE);
 	}
 	if (sigaction(SIGTERM, &sa, NULL) == -1)
 	{
-		perror("sigaction\r\n");
+		perror("Main: sigaction\r\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -287,14 +301,14 @@ int main(void)
 	serialThreadCheck = pthread_create(&serialThread, NULL, serialInterface, (void *)message1);
 	if (serialThreadCheck != 0)
 	{
-		printf("No se pudo crear el thread del puerto serie\r\n");
+		printf("Main: No se pudo crear el thread del puerto serie\r\n");
 		exit(EXIT_FAILURE);
 	}
 	printf("Main: Thread del puerto serie creado\n\r");
 	tcpThreadCheck = pthread_create(&tcpThread, NULL, tpcInterface, (void *)message2);
 	if (tcpThreadCheck != 0)
 	{
-		printf("No se pudo crear el thread del TCP\r\n");
+		printf("Main: No se pudo crear el thread del TCP\r\n");
 		exit(EXIT_FAILURE);
 	}
 	printf("Main: Thread TCP creado\r\n");
@@ -303,7 +317,66 @@ int main(void)
 	// No se hace nada en el main más que esperar las señales
 	while (1)
 	{
-		sleep(100);
+		if (checkOutSignal == 1)
+		{
+			serial_close();
+			printf("Main: Se cierra el puerto Serie\r\n");
+
+			if (newfd != INVALID_FD)
+			{
+				if (close(newfd) < 0)
+				{
+					printf("Main: No se pudo cerrar el socket TCP\r\n");
+					exit(EXIT_FAILURE);
+				}
+				else
+				{
+					printf("Main: Se cierra el Socket TCP\r\n");
+				}
+			}
+
+			if (pthread_cancel(serialThread) != 0)
+			{
+				printf("Main: No se pudo cancelar el thread Serie\r\n");
+				exit(EXIT_FAILURE);
+			}
+			else
+			{
+				printf("Main: Cancel del thread Serie\r\n");
+			}
+
+			if (pthread_cancel(tcpThread) != 0)
+			{
+				printf("Main: No se pudo cancelar el thread TCP\r\n");
+				exit(EXIT_FAILURE);
+			}
+			else
+			{
+				printf("Main: Cancel del thread TCP\r\n");
+			}
+
+			if (pthread_join(serialThread, NULL) != 0)
+			{
+				printf("Main: No se pudo hacer el Join del thread Serie\r\n");
+				exit(EXIT_FAILURE);
+			}
+			else
+			{
+				printf("Main: Join del thread Serie\r\n");
+			}
+
+			if (pthread_join(tcpThread, NULL) != 0)
+			{
+				printf("Main: No se pudo hacer el Join del thread TCP\r\n");
+				exit(EXIT_FAILURE);
+			}
+			else
+			{
+				printf("Main: Join del thread TCP\r\n");
+			}
+			exit(EXIT_SUCCESS);
+		}
+		sleep(1);
 	}
 	exit(EXIT_FAILURE);
 }
